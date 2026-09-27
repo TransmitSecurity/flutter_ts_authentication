@@ -3,9 +3,10 @@
 Production-ready Flutter plugin for Transmit Security Authentication.
 
 ## Build Info
-- Built: Tue Feb 17 12:16:15 EST 2026
-- Commit: a22f007
-- Flutter: Flutter 3.38.3 • channel stable • https://github.com/flutter/flutter.git
+- Built: Sun Sep 27 14:29:23 UTC 2026
+- Version: 0.0.5
+- Commit: a46202a
+- Flutter: Flutter 3.41.9 • channel stable • https://github.com/flutter/flutter.git
 
 ## Installation
 
@@ -16,7 +17,7 @@ dependencies:
   flutter_ts_authentication:
     git:
       url: https://github.com/TransmitSecurity/flutter_ts_authentication.git
-      ref: v  # Use the latest version tag
+      ref: 0.0.5
 ```
 
 Then run:
@@ -34,6 +35,11 @@ final tsAuth = FlutterTsAuthentication();
 // Initialize SDK
 await tsAuth.initializeSDK();
 
-// Initialize with parameters
-await tsAuth.initialize('client-id', 'domain', 'base-url');
+// Or initialize with parameters. `domain` is an origin, including the https:// scheme.
+await tsAuth.initialize(
+  'your-client-id',
+  'https://your-domain.com',
+  'https://api.transmitsecurity.io/',
+  null,
+);
 ```

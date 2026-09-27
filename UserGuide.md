@@ -34,6 +34,12 @@ flutter pub get
 - iOS 15.0+
 - Xcode 14+
 
+> **Note on the iOS floor.** The plugin declares `iOS 15.0` in both its `Package.swift` and its
+> podspec. The underlying native Authentication SDK declares a lower floor (`iOS 13` as of 1.2.2,
+> corrected from `iOS 15` in 1.2.1), but the plugin deliberately keeps 15.0: nothing in the plugin
+> is tested on iOS 13/14, and a stricter consumer constraint is always valid. If you need iOS
+> 13/14 support, raise it with Transmit Security rather than editing the constraint locally.
+
 #### 2. Update ios/Runner/Info.plist
 
 Add biometric permission:
@@ -221,7 +227,37 @@ try {
 }
 ```
 
+#### Unregister PIN Code
+
+```dart
+try {
+  final result = await auth.unregisterPinCode('username');
+  print('Public Key ID: ${result.publicKeyId}');
+
+  // Commit the unregistration once your backend acknowledged it
+  await auth.commitPinUnregistration(result.contextIdentifier);
+} catch (e) {
+  print('PIN unregistration failed: $e');
+}
+```
+
 ### Biometric Authentication
+
+#### Check Biometrics Availability
+
+```dart
+final status = await auth.nativeBiometricsStatus();
+if (status == TSBiometricsStatus.available) {
+  final type = await auth.nativeBiometricsType();
+  print('Biometrics available: $type');
+}
+```
+
+`TSBiometricsStatus` values: `available`, `notEnrolled`, `notAvailable`, `permissionDenied` (iOS),
+`lockedOut` (iOS), `securityUpdateRequired` (Android), `unsupported` (Android), `unknown`.
+
+`TSBiometricsType` values: `faceId`, `touchId`, `opticId`, `none`, and `biometric` — reported on
+Android, which does not expose the concrete modality.
 
 #### Register Biometrics
 
@@ -319,12 +355,47 @@ try {
 }
 ```
 
+#### WebAuthn Options
+
+The `options` parameter on `approvalWebAuthn`, `approvalWebAuthnWithData`,
+`authenticateWebAuthnWithData` and `signWebauthnTransactionWithData` accepts the names in
+`TSWebAuthnAuthenticationOptionValues`:
+
+| Option | Effect |
+|---|---|
+| `preferLocalCredentials` | Prefer credentials already present on the device over server-provided ones. **iOS only.** |
+
+**Platform behavior.** `options` is honored on **iOS only** — the native iOS SDK accepts a
+`WebAuthnAuthenticationOptions` set, while the native Android SDK's equivalent methods declare no
+options parameter. On Android the names are still **validated** so that an unrecognized value
+fails identically on both platforms, and are then a documented no-op.
+
+An unrecognized option name fails rather than being silently ignored. Pass an empty list for
+default behavior. The failure arrives as a `PlatformException` with `code == 'invalidArguments'`,
+and its `details` decode to `TSAuthenticationErrorCode.invalidArguments`:
+
+```dart
+try {
+  await auth.authenticateWebAuthnWithData(authData, <String>['typo-here']);
+} on PlatformException catch (e) {
+  final details = TSAuthenticationErrorDetails.fromPlatformException(e);
+  if (details.code == TSAuthenticationErrorCode.invalidArguments) {
+    // details.description names the offending values and the supported set
+    print(details.description);
+  }
+}
+```
+
 #### WebAuthn Approval
 
 ```dart
 // Method 1: With approval data
 final approvalData = {'transaction': 'transfer', 'amount': '100'};
-final options = <String>['option1', 'option2'];
+
+// Pass an empty list for default behavior, or use the named constants.
+final options = <String>[
+  TSWebAuthnAuthenticationOptionValues.preferLocalCredentials,
+];
 
 try {
   final result = await auth.approvalWebAuthn(
@@ -349,6 +420,26 @@ try {
 } catch (e) {
   print('WebAuthn approval failed: $e');
 }
+```
+
+#### WebAuthn with server-provided data
+
+When your backend performs the `start registration` / `start authentication` call itself, pass its
+response straight through instead of letting the SDK make the call:
+
+```dart
+final registrationData = TSWebAuthnRegistrationData(data: {
+  'webauthnSessionId': 'session-id',
+  'credentialCreationOptions': { /* rp, user, challenge, pubKeyCredParams, ... */ },
+});
+final registration = await auth.registerWebAuthnWithData(registrationData);
+
+final authData = TSWebAuthnAuthenticationData(data: {
+  'webauthnSessionId': 'session-id',
+  'credentialRequestOptions': { /* challenge, allowCredentials, rpId, ... */ },
+});
+final authentication = await auth.authenticateWebAuthnWithData(authData, options);
+final signature = await auth.signWebauthnTransactionWithData(authData, options);
 ```
 
 ### Device Information
@@ -410,6 +501,13 @@ try {
 **Security Types:**
 - `TSTOTPSecurityType.biometric`: Requires biometric authentication to generate codes
 - `TSTOTPSecurityType.none`: No additional security required
+- `TSTOTPSecurityType.devicePin`: Requires the device PIN / passcode
+- `TSTOTPSecurityType.devicePinOrBiometric`: Requires the device PIN / passcode or biometrics
+
+`devicePin` and `devicePinOrBiometric` require native Authentication SDK Android 1.0.30 / iOS 1.2.2
+or later. When the device cannot satisfy the requested protection, registration fails with
+`TSAuthenticationErrorCode.devicePinNotAvailable` or
+`TSAuthenticationErrorCode.devicePinOrBiometricNotAvailable`.
 
 #### Generate TOTP Code
 
@@ -480,6 +578,26 @@ try {
   }
 } catch (e) {
   print('Unexpected error: $e');
+}
+```
+
+### Error codes
+
+`PlatformException.details` carries a structured payload of
+`{'code': <stable code>, 'description': <native description>}`. Use
+`TSAuthenticationErrorDetails.fromPlatformException()` to read it — it maps the code onto the
+`TSAuthenticationErrorCode` enum and falls back to `unknown` for values it does not recognize:
+
+```dart
+try {
+  await auth.registerTOTP(uri, TSTOTPSecurityType.devicePin);
+} on PlatformException catch (e) {
+  final details = TSAuthenticationErrorDetails.fromPlatformException(e);
+  if (details.code == TSAuthenticationErrorCode.devicePinNotAvailable) {
+    print('Ask the user to set a device PIN first');
+  } else {
+    print('Registration failed: ${details.description}');
+  }
 }
 ```
 
@@ -575,14 +693,35 @@ class TSTOTPGenerateCodeCompletion {
    - Verify all required permissions are added
 
 3. **R8/ProGuard Issues (Release Builds)**
-   - The plugin includes consumer ProGuard rules automatically
-   - If you encounter minification issues, add these rules to your app's `android/app/proguard-rules.pro`:
-   
+   - The plugin includes consumer ProGuard rules automatically, in
+     `android/consumer-rules.pro`. These cover the `com.transmit.authentication.**` surface **and**
+     a narrow set of shared-core (`com.ts.coresdk.**`) crypto, error, logging and network classes,
+     which the plugin carries on core's behalf because neither the native Authentication SDK nor
+     `core-android-sdk` ships consumer rules of its own.
+   - **This class of failure only reproduces in a release build.** A debug build runs with
+     `minifyEnabled false`, so reflective and name-based serialization keeps are never exercised.
+     Test with `flutter build apk --release` (or your release variant) before shipping.
+   - If you still encounter minification issues, add these rules to your app's
+     `android/app/proguard-rules.pro`:
+
    ```proguard
    # Keep TSAuthentication SDK classes
    -keep class com.transmit.authentication.** { *; }
    -keep interface com.transmit.authentication.** { *; }
+
+   # Shared core, if you hit a stripped/renamed core class not covered above
+   -keep class com.ts.coresdk.** { *; }
    ```
+
+   - Note: the plugin deliberately does **not** keep `com.ts.coresdk.device.**` or
+     `com.ts.coresdk.geolocation.**`. No +A API reaches them, so keeping them would force
+     unnecessary rules on every integrator. If you also use the Mosaic DRS or IDO SDKs, their
+     own rules cover those packages.
+
+4. **New transitive dependency (core 1.0.30)**
+   - Shared core `1.0.30` adds `com.google.android.gms:play-services-location:20.0.0`, which now
+     arrives transitively through this plugin. If your app already depends on Play Services, check
+     for a version conflict and align versions in your app's `build.gradle` if needed.
 
 4. **Biometric Not Working**
    - Check device has biometric hardware
