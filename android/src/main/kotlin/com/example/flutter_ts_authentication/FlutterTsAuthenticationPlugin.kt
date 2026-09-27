@@ -34,15 +34,15 @@ import com.transmit.authentication.crpto.totp.ITSRegisterTOTPCallback
 import com.transmit.authentication.crpto.totp.ITSTOTPGenerateTOTPCallback
 import com.transmit.authentication.crpto.totp.TSTOTPError
 import com.transmit.authentication.crpto.totp.TSTOTPRegistrationResult
-import com.transmit.authentication.crpto.totp.TSTOTPSecurityType
-import com.transmit.authentication.network.startauth.TSAllowCredentials
-import com.transmit.authentication.network.startauth.TSCredentialRequestOptions
 import com.transmit.authentication.network.startauth.TSWebAuthnAuthenticationData
 import com.transmit.authentication.pincode.TSPinCodeAuthenticationError
 import com.transmit.authentication.pincode.TSPinCodeAuthenticationResult
 import com.transmit.authentication.pincode.TSPinCodeRegistrationContext
 import com.transmit.authentication.pincode.TSPinCodeRegistrationError
 import com.transmit.authentication.pincode.TSPinCodeRegistrationResult
+import com.transmit.authentication.pincode.TSPinCodeUnregistrationContext
+import com.transmit.authentication.pincode.TSPinCodeUnregistrationError
+import com.transmit.authentication.pincode.TSPinCodeUnregistrationResult
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -50,8 +50,6 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
-import org.json.JSONArray
-import org.json.JSONObject
 
 
 enum class AuthenticationPluginError(val code: String) {
@@ -91,12 +89,20 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             "registerPinCode" -> handleRegisterPinCode(call, result)
             "commitPinRegistration" -> handleCommitPinRegistration(call, result)
             "authenticatePinCode" -> handleAuthenticatePinCode(call, result)
+            "unregisterPinCode" -> handleUnregisterPinCode(call, result)
+            "commitPinUnregistration" -> handleCommitPinUnregistration(call, result)
             "registerNativeBiometrics" -> handleRegisterNativeBiometrics(call, result)
             "unregisterNativeBiometrics" -> handleUnregisterNativeBiometrics(call, result)
             "authenticateNativeBiometrics" -> handleAuthenticateNativeBiometrics(call, result)
+            "nativeBiometricsStatus" -> handleNativeBiometricsStatus(call, result)
+            "nativeBiometricsType" -> handleNativeBiometricsType(call, result)
             "registerWebAuthn" -> handleRegisterWebAuthn(call, result)
+            "registerWebAuthnWithData" -> handleRegisterWebAuthnWithData(call, result)
             "authenticateWebAuthn" -> handleAuthenticateWebAuthn(call, result)
+            "authenticateWebAuthnWithData" -> handleAuthenticateWebAuthnWithData(call, result)
             "signWebauthnTransaction" -> handleSignWebauthnTransaction(call, result)
+            "signWebauthnTransactionWithData" ->
+                handleSignWebauthnTransactionWithData(call, result)
             "approvalWebAuthn" -> handleApprovalWebAuthn(call, result)
             "approvalWebAuthnWithData" -> handleApprovalWebAuthnWithData(call, result)
             "approvalNativeBiometrics" -> handleApprovalNativeBiometrics(call, result)
@@ -121,7 +127,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             result.error(
                 AuthenticationPluginError.SDK_INIT_ERROR.code,
                 "Error initializing the SDK",
-                error.toString()
+                pluginErrorDetails(error)
             )
         }
     }
@@ -165,28 +171,25 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             initOptions = TSAuthenticationInitOptions(webAuthnInitOptions = paths)
         }
 
+        // An empty domain means "not configured" — normalize it to null rather than passing "",
+        // which native would treat as a present-but-invalid origin. `domain` and `initOptions` are
+        // independent inputs, so initOptions must survive an absent domain.
+        val normalizedDomain = domain?.takeIf { it.isNotEmpty() }
+
         try {
-            if (domain !== null && domain.isNotEmpty()) {
-                TSAuthentication.initialize(
-                    applicationContext,
-                    clientId,
-                    baseUrl,
-                    domain,
-                    initOptions
-                )
-            } else {
-                TSAuthentication.initialize(
-                    applicationContext,
-                    clientId,
-                    baseUrl
-                )
-            }
+            TSAuthentication.initialize(
+                applicationContext,
+                clientId,
+                baseUrl,
+                normalizedDomain,
+                initOptions
+            )
             result.success(true)
         } catch (error: Exception) {
             result.error(
                 AuthenticationPluginError.SDK_INIT_ERROR.code,
                 "Error initializing the SDK",
-                error.toString()
+                pluginErrorDetails(error)
             )
         }
     }
@@ -226,7 +229,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.PIN_CODE.code,
                         "Error registering pic code",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
@@ -265,7 +268,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             result.error(
                 AuthenticationPluginError.COMMIT_REGISTRATION.code,
                 "Error committing pin registration",
-                error.toString()
+                pluginErrorDetails(error)
             )
         }
     }
@@ -303,11 +306,91 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.PIN_CODE.code,
                         "Error authenticating using pic code",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
         )
+    }
+
+    // MARK: - API Implementation | Unregister PIN Code
+
+    private fun handleUnregisterPinCode(call: MethodCall, result: Result) {
+        val arguments = call.arguments as? Map<String, Any>
+        val username = arguments?.get("username") as? String
+
+        if (username == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Missing username",
+                null
+            )
+            return
+        }
+
+        TSAuthentication.unregisterPinCode(username,
+            object : TSAuthCallback<TSPinCodeUnregistrationResult, TSPinCodeUnregistrationError> {
+                override fun success(unregistrationResult: TSPinCodeUnregistrationResult) {
+                    val context: TSPinCodeUnregistrationContext =
+                        unregistrationResult.unregistrationContext()
+                    val contextIdentifier: String = generateContextIdentifier()
+                    storeContextWithIdentifier(contextIdentifier, context)
+
+                    val resultMap = hashMapOf<String, Any>(
+                        "publicKeyId" to unregistrationResult.keyId(),
+                        "contextIdentifier" to contextIdentifier
+                    )
+
+                    result.success(resultMap)
+                }
+
+                override fun error(error: TSPinCodeUnregistrationError) {
+                    result.error(
+                        AuthenticationPluginError.PIN_CODE.code,
+                        "Error unregistering pin code",
+                        error.toErrorDetails()
+                    )
+                }
+            }
+        )
+    }
+
+    private fun handleCommitPinUnregistration(call: MethodCall, result: Result) {
+        val arguments = call.arguments as? Map<String, Any>
+        val contextIdentifier = arguments?.get("contextIdentifier") as? String
+
+        if (contextIdentifier == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Missing contextIdentifier",
+                null
+            )
+            return
+        }
+
+        val context =
+            getContextWithIdentifier(contextIdentifier) as? TSPinCodeUnregistrationContext
+
+        if (context == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Invalid contextIdentifier argument",
+                "Unable to find PIN unregistration context with provided contextIdentifier: $contextIdentifier"
+            )
+            return
+        }
+
+        try {
+            removeContextWithIdentifier(contextIdentifier)
+            context.commit()
+            result.success(null)
+        } catch (error: Exception) {
+            result.error(
+                AuthenticationPluginError.COMMIT_REGISTRATION.code,
+                "Error committing pin unregistration",
+                genericErrorDetails(error)
+            )
+        }
     }
 
     private fun handleRegisterWebAuthn(call: MethodCall, result: Result) {
@@ -360,7 +443,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                 result.error(
                     AuthenticationPluginError.WEB_AUTHN.code,
                     "Error registering WebAuthn",
-                    error.toString()
+                    pluginErrorDetails(error)
                 )
             }
         })
@@ -405,7 +488,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.WEB_AUTHN.code,
                         "Error authenticting using WebAuthn",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -450,10 +533,171 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.WEB_AUTHN.code,
                         "Error signing transaction WebAuthn",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
+    }
+
+    // MARK: - API Implementation | WebAuthn With Data
+
+    private fun handleRegisterWebAuthnWithData(call: MethodCall, result: Result) {
+        val arguments = call.arguments as? Map<String, Any>
+        val rawRegistrationData = arguments?.get("rawRegistrationData") as? Map<String, Any>
+
+        if (rawRegistrationData == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Missing rawRegistrationData",
+                null
+            )
+            return
+        }
+
+        val registrationData = convertWebAuthnRegistrationData(rawRegistrationData)
+        if (registrationData == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Error converting registration data",
+                null
+            )
+            return
+        }
+
+        val fragmentActivity = getFragmentActivity()
+        if (fragmentActivity == null) {
+            result.error(
+                AuthenticationPluginError.UNSUPPORTED_CONFIGURATION.code,
+                "Unable to get Fragment activity",
+                null
+            )
+            return
+        }
+
+        TSAuthentication.registerWebAuthn(
+            fragmentActivity,
+            registrationData,
+            object : TSAuthCallback<RegistrationResult, TSWebAuthnRegistrationError> {
+                override fun success(registrationResult: RegistrationResult) {
+                    result.success(hashMapOf<String, Any>("result" to registrationResult.result()))
+                }
+
+                override fun error(error: TSWebAuthnRegistrationError) {
+                    result.error(
+                        AuthenticationPluginError.WEB_AUTHN.code,
+                        "Error registering WebAuthn with data",
+                        genericErrorDetails(error)
+                    )
+                }
+            })
+    }
+
+    private fun handleAuthenticateWebAuthnWithData(call: MethodCall, result: Result) {
+        val authData = webAuthnAuthenticationDataArgument(call, result) ?: return
+
+        val fragmentActivity = getFragmentActivity()
+        if (fragmentActivity == null) {
+            result.error(
+                AuthenticationPluginError.UNSUPPORTED_CONFIGURATION.code,
+                "Unable to get Fragment activity",
+                null
+            )
+            return
+        }
+
+        TSAuthentication.authenticateWebAuthn(
+            fragmentActivity,
+            authData,
+            object : TSAuthCallback<AuthenticationResult, TSWebAuthnAuthenticationError> {
+                override fun success(authenticationResult: AuthenticationResult) {
+                    result.success(hashMapOf<String, Any>("result" to authenticationResult.result()))
+                }
+
+                override fun error(error: TSWebAuthnAuthenticationError) {
+                    result.error(
+                        AuthenticationPluginError.WEB_AUTHN.code,
+                        "Error authenticating using WebAuthn with data",
+                        genericErrorDetails(error)
+                    )
+                }
+            })
+    }
+
+    private fun handleSignWebauthnTransactionWithData(call: MethodCall, result: Result) {
+        val authData = webAuthnAuthenticationDataArgument(call, result) ?: return
+
+        val fragmentActivity = getFragmentActivity()
+        if (fragmentActivity == null) {
+            result.error(
+                AuthenticationPluginError.UNSUPPORTED_CONFIGURATION.code,
+                "Unable to get Fragment activity",
+                null
+            )
+            return
+        }
+
+        TSAuthentication.signTransactionWebAuthn(
+            fragmentActivity,
+            authData,
+            object : TSAuthCallback<AuthenticationResult, TSWebAuthnAuthenticationError> {
+                override fun success(authenticationResult: AuthenticationResult) {
+                    result.success(hashMapOf<String, Any>("result" to authenticationResult.result()))
+                }
+
+                override fun error(error: TSWebAuthnAuthenticationError) {
+                    result.error(
+                        AuthenticationPluginError.WEB_AUTHN.code,
+                        "Error signing transaction WebAuthn with data",
+                        genericErrorDetails(error)
+                    )
+                }
+            })
+    }
+
+    /**
+     * Reads and converts the `rawAuthenticationData` argument, reporting the
+     * matching argument error and returning `null` when it is missing or invalid.
+     */
+    private fun webAuthnAuthenticationDataArgument(
+        call: MethodCall,
+        result: Result
+    ): TSWebAuthnAuthenticationData? {
+        val arguments = call.arguments as? Map<String, Any>
+        val authDataMap = arguments?.get("rawAuthenticationData") as? Map<String, Any>
+
+        if (authDataMap == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Missing rawAuthenticationData",
+                null
+            )
+            return null
+        }
+
+        val authData = convertWebAuthnAuthenticationData(authDataMap)
+        if (authData == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Error converting authentication data",
+                null
+            )
+        }
+        return authData
+    }
+
+    // MARK: - API Implementation | Native Biometrics Availability
+
+    private fun handleNativeBiometricsStatus(call: MethodCall, result: Result) {
+        result.success(
+            TSAuthentication.getNativeBiometricsStatus(applicationContext).toPluginStatus()
+        )
+    }
+
+    private fun handleNativeBiometricsType(call: MethodCall, result: Result) {
+        result.success(
+            TSAuthentication.getNativeBiometricsStatus(applicationContext)
+                .toPluginBiometricsType()
+        )
     }
 
      private fun handleRegisterNativeBiometrics(call: MethodCall, result: Result) {
@@ -490,7 +734,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.NATIVE_BIOMETRICS.code,
                         "Error registering native biometrics",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -528,7 +772,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.NATIVE_BIOMETRICS.code,
                         "Error unregistering native biometrics",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
@@ -579,7 +823,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.NATIVE_BIOMETRICS.code,
                         "Error authenticating native biometrics",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -596,6 +840,23 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                 AuthenticationPluginError.INVALID_ARGUMENTS.code,
                 "Missing approvalData or options",
                 null
+            )
+            return
+        }
+
+        // `options` is an iOS-only native affordance. Validated here so the error contract
+        // matches iOS, then intentionally not forwarded — the Android SDK's approvalWebAuthn takes
+        // no options parameter. Documented as a no-op in UserGuide.md.
+        if (!WebAuthnOptionsValidator.areValid(options)) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Unrecognized WebAuthn option(s): ${WebAuthnOptionsValidator.unrecognized(options)}",
+                errorDetails(
+                    AuthenticationErrorCode.INVALID_ARGUMENTS,
+                    "Unrecognized WebAuthn option(s): " +
+                        "${WebAuthnOptionsValidator.unrecognized(options)}. " +
+                        "Supported: preferLocalCredentials."
+                )
             )
             return
         }
@@ -617,7 +878,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.WEB_AUTHN.code,
                         "Error during approval WebAuthn",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -637,8 +898,23 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             return
         }
 
+        // See handleApprovalWebAuthn: iOS-only affordance, validated then not forwarded.
+        if (!WebAuthnOptionsValidator.areValid(options)) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Unrecognized WebAuthn option(s): ${WebAuthnOptionsValidator.unrecognized(options)}",
+                errorDetails(
+                    AuthenticationErrorCode.INVALID_ARGUMENTS,
+                    "Unrecognized WebAuthn option(s): " +
+                        "${WebAuthnOptionsValidator.unrecognized(options)}. " +
+                        "Supported: preferLocalCredentials."
+                )
+            )
+            return
+        }
+
         val authData: TSWebAuthnAuthenticationData? =
-            this.convertWebAuthnAuthenticationData(authDataMap)
+            convertWebAuthnAuthenticationData(authDataMap)
 
         if (authData == null) {
             result.error(
@@ -665,7 +941,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.WEB_AUTHN.code,
                         "Error during approval WebAuthn with data",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -717,7 +993,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.WEB_AUTHN.code,
                         "Error during native biometrics approval",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             })
@@ -739,7 +1015,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.DEVICE_INFO.code,
                         "Error during getDeviceInfo",
-                        tsDeviceInfoError.toString()
+                        pluginErrorDetails(tsDeviceInfoError)
                     )
                 }
             })
@@ -785,9 +1061,14 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
             return
         }
 
-        val securityType = when (securityTypeString) {
-            "none" -> TSTOTPSecurityType.None
-            else -> TSTOTPSecurityType.Biometric
+        val securityType = totpSecurityTypeFromName(securityTypeString)
+        if (securityType == null) {
+            result.error(
+                AuthenticationPluginError.INVALID_ARGUMENTS.code,
+                "Unsupported securityType: $securityTypeString",
+                null
+            )
+            return
         }
 
         val fragmentActivity = getFragmentActivity()
@@ -816,7 +1097,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                 result.error(
                     AuthenticationPluginError.TOTP.code,
                     "Error during TOTP Registration",
-                    error.toString()
+                    pluginErrorDetails(error)
                 )
             }
         })
@@ -863,7 +1144,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.TOTP.code,
                         "Error during TOTP Registration",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
@@ -913,7 +1194,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.TOTP.code,
                         "Error during TOTP Registration",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
@@ -951,7 +1232,7 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
                     result.error(
                         AuthenticationPluginError.SIGN_WITH_DEVICE_KEY.code,
                         "Error during sign with device key",
-                        error.toString()
+                        pluginErrorDetails(error)
                     )
                 }
             }
@@ -990,101 +1271,6 @@ class FlutterTsAuthenticationPlugin : FlutterPlugin, MethodCallHandler, Activity
         val resId =
             context.getResources().getIdentifier(resourceName, "string", context.getPackageName())
         return if (resId != 0) context.getString(resId) else defaultValue
-    }
-
-    private fun convertWebAuthnAuthenticationData(
-        rawData: Map<String, Any>
-    ): TSWebAuthnAuthenticationData? {
-        val webAuthnSessionId = rawData.get("webauthnSessionId") as String?
-        if (webAuthnSessionId == null || webAuthnSessionId.isEmpty()) {
-            return null
-        }
-
-        val rawCredentialRequestOptions =
-            rawData.get("credentialRequestOptions") as MutableMap<String?, Any?>?
-        if (rawCredentialRequestOptions == null) {
-            return null
-        }
-
-        val challenge = rawCredentialRequestOptions["challenge"] as String?
-        val rawChallenge = rawCredentialRequestOptions["rawChallenge"] as String?
-        val userVerification = rawCredentialRequestOptions["userVerification"] as String?
-
-        val allowCredentialObj = rawCredentialRequestOptions["allowCredentials"]
-        var allowCredentials: Array<TSAllowCredentials>? = null
-        if (allowCredentialObj is MutableList<*>) {
-            val allowCredentialsList = allowCredentialObj
-            allowCredentials = this.convertAllowCredentials(allowCredentialsList)
-        }
-
-        val rpId = rawCredentialRequestOptions["rpId"] as String?
-        val timeout = rawCredentialRequestOptions["timeout"] as Double?
-
-        val attestation = rawCredentialRequestOptions["attestation"] as String?
-
-        val transportsObj = rawCredentialRequestOptions["transports"]
-        var transportsJson: JSONObject? = null
-        try {
-            if (transportsObj is MutableList<*>) {
-                val transportsList = transportsObj
-                val transportsArray = JSONArray()
-                for (t in transportsList) {
-                    if (t is String) {
-                        transportsArray.put(t)
-                    }
-                }
-                transportsJson = JSONObject()
-                transportsJson.put("transports", transportsArray)
-            }
-        } catch (e: java.lang.Exception) {
-            transportsJson = null
-        }
-
-        val credentialRequestOptions = TSCredentialRequestOptions(
-            if (challenge != null) challenge else "",
-            rawChallenge,
-            userVerification,
-            transportsJson,
-            allowCredentials,
-            rpId,
-            timeout,
-            attestation
-        )
-
-        val authData = TSWebAuthnAuthenticationData(
-            webAuthnSessionId,
-            credentialRequestOptions
-        )
-
-        return authData
-    }
-
-    private fun convertAllowCredentials(allowCredentialsArray: MutableList<*>): Array<TSAllowCredentials>? {
-        val result: MutableList<TSAllowCredentials> = ArrayList<TSAllowCredentials>()
-        for (item in allowCredentialsArray) {
-            if (item is MutableMap<*, *>) {
-                val rawAllowCredential = item as MutableMap<String?, Any?>
-                var transports: Array<String>? = null
-                val transportsObj = rawAllowCredential["transports"]
-                if (transportsObj is MutableList<*>) {
-                    val transportsList = transportsObj
-                    val transportsResult: MutableList<String> = ArrayList<String>()
-                    for (transport in transportsList) {
-                        if (transport is String) {
-                            transportsResult.add(transport)
-                        }
-                    }
-                    transports = transportsResult.toTypedArray()
-                }
-                val data = TSAllowCredentials(
-                    rawAllowCredential["type"] as String?,
-                    rawAllowCredential["id"] as String?,
-                    transports
-                )
-                result.add(data)
-            }
-        }
-        return result.toTypedArray()
     }
 
     private fun getFragmentActivity(): FragmentActivity? {

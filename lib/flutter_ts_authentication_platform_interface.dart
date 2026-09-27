@@ -59,11 +59,59 @@ abstract class FlutterTsAuthenticationPlatform extends PlatformInterface {
     throw UnimplementedError('authenticatePinCode() has not been implemented.');
   }
 
+  Future<TSPinCodeUnregistrationCompletion> unregisterPinCode(String username) {
+    throw UnimplementedError('unregisterPinCode() has not been implemented.');
+  }
+
+  Future<void> commitPinUnregistration(String contextIdentifier) {
+    throw UnimplementedError(
+      'commitPinUnregistration() has not been implemented.',
+    );
+  }
+
   Future<TSBiometricsRegistrationResult> registerNativeBiometrics(
     String username,
   ) {
     throw UnimplementedError(
       'registerNativeBiometrics() has not been implemented.',
+    );
+  }
+
+  Future<TSBiometricsStatus> nativeBiometricsStatus() {
+    throw UnimplementedError(
+      'nativeBiometricsStatus() has not been implemented.',
+    );
+  }
+
+  Future<TSBiometricsType> nativeBiometricsType() {
+    throw UnimplementedError(
+      'nativeBiometricsType() has not been implemented.',
+    );
+  }
+
+  Future<TSWebAuthnRegistrationResults> registerWebAuthnWithData(
+    TSWebAuthnRegistrationData rawRegistrationData,
+  ) {
+    throw UnimplementedError(
+      'registerWebAuthnWithData() has not been implemented.',
+    );
+  }
+
+  Future<TSWebAuthnAuthenticationResults> authenticateWebAuthnWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) {
+    throw UnimplementedError(
+      'authenticateWebAuthnWithData() has not been implemented.',
+    );
+  }
+
+  Future<TSWebAuthnAuthenticationResults> signWebauthnTransactionWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) {
+    throw UnimplementedError(
+      'signWebauthnTransactionWithData() has not been implemented.',
     );
   }
 

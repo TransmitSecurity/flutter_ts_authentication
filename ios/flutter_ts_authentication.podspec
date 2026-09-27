@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_ts_authentication'
-  s.version          = '0.0.4'
+  s.version          = '0.0.5'
   s.summary          = 'A plugin for the Transmit Security Authentication SDK.'
   s.description      = <<-DESC
 A Flutter plugin for the Transmit Security Authentication SDK.

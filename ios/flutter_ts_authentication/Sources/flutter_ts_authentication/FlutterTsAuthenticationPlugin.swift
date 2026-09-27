@@ -38,18 +38,32 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             handleCommitPinRegistration(call: call, result: result)
         case "authenticatePinCode":
             handleAuthenticatePinCode(call: call, result: result)
+        case "unregisterPinCode":
+            handleUnregisterPinCode(call: call, result: result)
+        case "commitPinUnregistration":
+            handleCommitPinUnregistration(call: call, result: result)
         case "registerNativeBiometrics":
             handleRegisterNativeBiometrics(call: call, result: result)
         case "unregisterNativeBiometrics":
             handleUnregisterNativeBiometrics(call: call, result: result)
         case "authenticateNativeBiometrics":
             handleAuthenticateNativeBiometrics(call: call, result: result)
+        case "nativeBiometricsStatus":
+            handleNativeBiometricsStatus(call: call, result: result)
+        case "nativeBiometricsType":
+            handleNativeBiometricsType(call: call, result: result)
         case "registerWebAuthn":
             handleRegisterWebAuthn(call: call, result: result)
+        case "registerWebAuthnWithData":
+            handleRegisterWebAuthnWithData(call: call, result: result)
         case "authenticateWebAuthn":
             handleAuthenticateWebAuthn(call: call, result: result)
+        case "authenticateWebAuthnWithData":
+            handleAuthenticateWebAuthnWithData(call: call, result: result)
         case "signWebauthnTransaction":
             handleSignWebauthnTransaction(call: call, result: result)
+        case "signWebauthnTransactionWithData":
+            handleSignWebauthnTransactionWithData(call: call, result: result)
         case "approvalWebAuthn":
             handleApprovalWebAuthn(call: call, result: result)
         case "approvalWebAuthnWithData":
@@ -93,7 +107,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             result(FlutterError(
                 code: AuthenticationPluginError.sdkInitError.rawValue,
                 message: "Error initializing the SDK",
-                details: error.localizedDescription
+                details: pluginErrorDetails(error)
             ))
         }
     }
@@ -110,7 +124,10 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
         }
         
         let baseUrl = arguments["baseUrl"] as? String ?? "https://api.transmitsecurity.io"
-        let domain = arguments["domain"] as? String
+        // An empty domain means "not configured" — map it to nil, matching Android. Native declares
+        // `domain: String? = nil`, so "" would arrive as a present-but-invalid origin (the SDK
+        // expects scheme + host, e.g. "https://example.com") rather than as an absent value.
+        let domain = (arguments["domain"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         
         var initOptions: TSAuthenticationSDK.TSAuthenticationInitOptions?
         
@@ -144,7 +161,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             result(FlutterError(
                 code: AuthenticationPluginError.sdkInitError.rawValue,
                 message: "Error initializing the SDK",
-                details: error.localizedDescription
+                details: pluginErrorDetails(error)
             ))
         }
     }
@@ -182,7 +199,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.pinCode.rawValue,
                     message: "Error registering pin code",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -218,7 +235,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             result(FlutterError(
                 code: AuthenticationPluginError.commitRegistration.rawValue,
                 message: "Error during inRegistrationContext.commit()",
-                details: error.localizedDescription
+                details: pluginErrorDetails(error)
             ))
         }
     }
@@ -256,14 +273,94 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.pinCode.rawValue,
                     message: "Error during pin code authentication",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
     }
     
+    // MARK: - Pin Code Unregistration
+
+    private func handleUnregisterPinCode(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let username = arguments["username"] as? String else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Missing username",
+                details: nil
+            ))
+            return
+        }
+
+        TSAuthentication.shared.unregisterPinCode(username: username) { [weak self] results in
+            guard let self = self else { return }
+
+            switch results {
+            case .success(let response):
+                let identifier = self.generateContextIdentifier()
+                self.storeContextWithIdentifier(identifier, context: response.unregistrationContext)
+
+                result([
+                    "publicKeyId": response.publicKeyId,
+                    "contextIdentifier": identifier
+                ])
+            case .failure(let error):
+                result(FlutterError(
+                    code: AuthenticationPluginError.pinCode.rawValue,
+                    message: "Error unregistering pin code",
+                    details: pluginErrorDetails(error)
+                ))
+            }
+        }
+    }
+
+    private func handleCommitPinUnregistration(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let contextIdentifier = arguments["contextIdentifier"] as? String,
+              !contextIdentifier.isEmpty else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Missing contextIdentifier",
+                details: nil
+            ))
+            return
+        }
+
+        guard var unregistrationContext = getContextWithIdentifier(contextIdentifier) as? TSAuthenticationSDK.TSRegistrationContext else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Invalid contextIdentifier argument",
+                details: "Unable to find PIN unregistration context with provided contextIdentifier: \(contextIdentifier)"
+            ))
+            return
+        }
+
+        removeContextWithIdentifier(contextIdentifier)
+
+        do {
+            try unregistrationContext.commit()
+            result(nil)
+        } catch {
+            result(FlutterError(
+                code: AuthenticationPluginError.commitRegistration.rawValue,
+                message: "Error during unregistrationContext.commit()",
+                details: pluginErrorDetails(error)
+            ))
+        }
+    }
+
+    // MARK: - Native Biometrics Availability
+
+    private func handleNativeBiometricsStatus(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        result(pluginBiometricsStatus(TSAuthentication.nativeBiometricsStatus()))
+    }
+
+    private func handleNativeBiometricsType(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        result(pluginBiometricsType(TSAuthentication.nativeBiometricsType()))
+    }
+
     // MARK: - WebAuthn
-    
+
     private func handleRegisterWebAuthn(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let username = arguments["username"] as? String,
@@ -287,7 +384,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                     result(FlutterError(
                         code: AuthenticationPluginError.webAuthn.rawValue,
                         message: "Missing username or displayName",
-                        details: error.localizedDescription
+                        details: pluginErrorDetails(error)
                     ))
                 }
             }
@@ -316,7 +413,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.webAuthn.rawValue,
                     message: "Error authenticating using WebAuthn",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -345,14 +442,130 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.webAuthn.rawValue,
                     message: "Error signing transaction using WebAuthn",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
     }
     
+    // MARK: - WebAuthn With Data
+
+    private func handleRegisterWebAuthnWithData(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let arguments = call.arguments as? [String: Any],
+              let rawRegistrationData = arguments["rawRegistrationData"] as? [String: AnyHashable] else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Missing rawRegistrationData",
+                details: nil
+            ))
+            return
+        }
+
+        guard let registrationData = convertWebAuthnRegistrationData(rawRegistrationData) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Invalid rawRegistrationData",
+                details: nil
+            ))
+            return
+        }
+
+        TSAuthentication.shared.registerWebAuthn(registrationData) { registrationResults in
+            switch registrationResults {
+            case .success(let response):
+                result(["result": response.result])
+            case .failure(let error):
+                result(FlutterError(
+                    code: AuthenticationPluginError.webAuthn.rawValue,
+                    message: "Error during registerWebAuthnWithData",
+                    details: pluginErrorDetails(error)
+                ))
+            }
+        }
+    }
+
+    private func handleAuthenticateWebAuthnWithData(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let (authenticationData, options) = webAuthnAuthenticationArguments(call: call, result: result) else {
+            return
+        }
+
+        TSAuthentication.shared.authenticateWebAuthn(authenticationData, options: options) { results in
+            switch results {
+            case .success(let response):
+                result(["result": response.result])
+            case .failure(let error):
+                result(FlutterError(
+                    code: AuthenticationPluginError.webAuthn.rawValue,
+                    message: "Error during authenticateWebAuthnWithData",
+                    details: pluginErrorDetails(error)
+                ))
+            }
+        }
+    }
+
+    private func handleSignWebauthnTransactionWithData(call: FlutterMethodCall, result: @escaping FlutterResult) {
+        guard let (authenticationData, options) = webAuthnAuthenticationArguments(call: call, result: result) else {
+            return
+        }
+
+        TSAuthentication.shared.signWebauthnTransaction(authenticationData, options: options) { results in
+            switch results {
+            case .success(let response):
+                result(["result": response.result])
+            case .failure(let error):
+                result(FlutterError(
+                    code: AuthenticationPluginError.webAuthn.rawValue,
+                    message: "Error during signWebauthnTransactionWithData",
+                    details: pluginErrorDetails(error)
+                ))
+            }
+        }
+    }
+
+    /// Reads and converts the `rawAuthenticationData` and `options` arguments,
+    /// reporting the matching argument error and returning `nil` when either is
+    /// missing or invalid.
+    private func webAuthnAuthenticationArguments(
+        call: FlutterMethodCall,
+        result: @escaping FlutterResult
+    ) -> (TSAuthenticationSDK.TSWebAuthnAuthenticationData, TSAuthenticationSDK.TSAuthentication.WebAuthnAuthenticationOptions)? {
+        guard let arguments = call.arguments as? [String: Any],
+              let rawAuthenticationData = arguments["rawAuthenticationData"] as? [String: AnyHashable],
+              let options = arguments["options"] as? [String] else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Missing rawAuthenticationData or options",
+                details: nil
+            ))
+            return nil
+        }
+
+        guard let authenticationData = convertWebAuthnAuthenticationData(rawAuthenticationData) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Invalid rawAuthenticationData",
+                details: nil
+            ))
+            return nil
+        }
+
+        guard let webAuthnOptions = convertWebAuthnOptions(options) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Unrecognized WebAuthn option in \(options)",
+                details: errorDetails(
+                    .invalidArguments,
+                    "Unrecognized WebAuthn option in \(options). Supported: preferLocalCredentials."
+                )
+            ))
+            return nil
+        }
+
+        return (authenticationData, webAuthnOptions)
+    }
+
     // MARK: - Native Biometrics
-    
+
     private func handleRegisterNativeBiometrics(call: FlutterMethodCall, result: @escaping FlutterResult) {
         guard let arguments = call.arguments as? [String: Any],
               let username = arguments["username"] as? String else {
@@ -383,7 +596,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.nativeBioMetrics.rawValue,
                     message: "Error registering native biometrics",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -413,7 +626,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.nativeBioMetrics.rawValue,
                     message: "Error unregistering native biometrics",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -450,7 +663,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.nativeBioMetrics.rawValue,
                     message: "Error authenticating using native biometrics",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -471,8 +684,20 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
         }
         
         let username = arguments["username"] as? String
-        
-        TSAuthentication.shared.approvalWebAuthn(approvalData: approvalData, username: username, options: self.convertWebAuthnOptions(options)) { [weak self] approvalResults in
+
+        guard let webAuthnOptions = convertWebAuthnOptions(options) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Unrecognized WebAuthn option in \(options)",
+                details: errorDetails(
+                    .invalidArguments,
+                    "Unrecognized WebAuthn option in \(options). Supported: preferLocalCredentials."
+                )
+            ))
+            return
+        }
+
+        TSAuthentication.shared.approvalWebAuthn(approvalData: approvalData, username: username, options: webAuthnOptions) { [weak self] approvalResults in
             guard let self = self else { return }
             
             switch approvalResults {
@@ -484,7 +709,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.webAuthn.rawValue,
                     message: "Error during approvalWebAuthn",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -513,9 +738,21 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             return
         }
         
+        guard let webAuthnOptions = convertWebAuthnOptions(options) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Unrecognized WebAuthn option in \(options)",
+                details: errorDetails(
+                    .invalidArguments,
+                    "Unrecognized WebAuthn option in \(options). Supported: preferLocalCredentials."
+                )
+            ))
+            return
+        }
+
         TSAuthentication.shared.approvalWebAuthn(
             authenticationData,
-            options: self.convertWebAuthnOptions(options)
+            options: webAuthnOptions
         ) { [weak self] approvalResults in
             guard let self = self else { return }
             
@@ -528,7 +765,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.webAuthn.rawValue,
                     message: "Error during approvalWebAuthnWithData",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -564,7 +801,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.nativeBioMetrics.rawValue,
                     message: "Error during approvalNativeBiometrics",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -587,7 +824,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.deviceInfo.rawValue,
                     message: "Error during getDeviceInfo",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -635,8 +872,16 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
             return
         }
         
-        let securityType: TSAuthenticationSDK.TSTOTPSecurityType = (securityTypeString == "none") ? .none : .biometric
-                
+        guard let securityType = totpSecurityType(fromName: securityTypeString) else {
+            result(FlutterError(
+                code: AuthenticationPluginError.invalidArguments.rawValue,
+                message: "Unsupported securityType: \(securityTypeString)",
+                details: nil
+            ))
+            return
+        }
+
+
         TSAuthentication.shared.registerTOTP(
             URI: uri,
             securityType: securityType) { totpRegistrationResults in
@@ -652,7 +897,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                     result(FlutterError(
                         code: AuthenticationPluginError.totp.rawValue,
                         message: "Error during register TOTP",
-                        details: error.localizedDescription
+                        details: pluginErrorDetails(error)
                     ))
                 }
             }
@@ -682,7 +927,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.totp.rawValue,
                     message: "Error during generateTOTPCode",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -713,7 +958,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.totp.rawValue,
                     message: "Error during generateTOTPCodeWithChallenge",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -743,7 +988,7 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
                 result(FlutterError(
                     code: AuthenticationPluginError.signWithDeviceKey.rawValue,
                     message: "Error during signWithDeviceKey",
-                    details: error.localizedDescription
+                    details: pluginErrorDetails(error)
                 ))
             }
         }
@@ -751,54 +996,34 @@ public class FlutterTsAuthenticationPlugin: NSObject, FlutterPlugin {
     
     // MARK: - Helper Functions
     
-    private func convertWebAuthnOptions(_ rawOptions: [String]) -> TSAuthenticationSDK.TSAuthentication.WebAuthnAuthenticationOptions {
+    /// Maps the WebAuthn option names sent from Dart onto the native `OptionSet`.
+    ///
+    /// Returns `nil` for an unrecognized name so the caller can report an argument error rather
+    /// than silently proceeding with a weaker option set than the integrator asked for. This
+    /// mirrors `totpSecurityTypeFromName` on the Android side, where a silent fallback was
+    /// deliberately replaced with an explicit `invalidArguments` failure.
+    ///
+    /// The SDK exposes exactly one option, spelled `preferLocalCredantials` (a typo in the native
+    /// SDK). The plugin accepts the correctly spelled `preferLocalCredentials` as its public
+    /// contract and also tolerates the SDK's spelling, so callers who copied the native name still
+    /// work. Both map to the same option.
+    private func convertWebAuthnOptions(
+        _ rawOptions: [String]
+    ) -> TSAuthenticationSDK.TSAuthentication.WebAuthnAuthenticationOptions? {
         var options: TSAuthenticationSDK.TSAuthentication.WebAuthnAuthenticationOptions = []
-        // TODO: Consult SDK developer regarding this parameter
+
+        for rawOption in rawOptions {
+            switch rawOption {
+            case "preferLocalCredentials", "preferLocalCredantials":
+                options.insert(.preferLocalCredantials)
+            default:
+                return nil
+            }
+        }
+
         return options
     }
     
-    private func convertWebAuthnAuthenticationData(_ rawData: [String: AnyHashable]) -> TSAuthenticationSDK.TSWebAuthnAuthenticationData? {
-        guard let credentialRequestOptions = rawData["credentialRequestOptions"] as? [String: AnyHashable],
-              let webauthnSessionId = rawData["webauthnSessionId"] as? String else {
-            return nil
-        }
-        
-        let rawUserData: [String: AnyHashable]? = credentialRequestOptions["userData"] as? [String: AnyHashable]
-        
-        let userData = TSAuthenticationSDK.TSWebAuthnUserData(
-            id: rawUserData?["id"] as? String,
-            name: rawUserData?["name"] as? String,
-            displayName: rawUserData?["displayName"] as? String
-        )
-        
-        let optionsData = TSWebAuthnAuthenticationCredentialRequestOptionsData(
-            challenge: credentialRequestOptions["challenge"] as? String,
-            allowCredentials: convertAllowCredentials(credentialRequestOptions),
-            userVerification: credentialRequestOptions["userVerification"] as? String,
-            rpId: credentialRequestOptions["rpId"] as? String,
-            user: userData
-        )
-        
-        let authenticationData = TSAuthenticationSDK.TSWebAuthnAuthenticationData(
-            webauthnSessionId: webauthnSessionId,
-            credentialRequestOptions: optionsData
-        )
-        
-        return authenticationData
-    }
-    
-    private func convertAllowCredentials(_ credentialRequestOptions: [String: AnyHashable]) -> [TSWebAuthnAllowCredentialsData]? {
-        guard let allowCredentialsArray = credentialRequestOptions["allowCredentials"] as? [[String: AnyHashable]] else {
-            return nil
-        }
-        
-        return allowCredentialsArray.map { rawAllowCredential in
-            TSWebAuthnAllowCredentialsData(
-                id: rawAllowCredential["id"] as? String,
-                name: rawAllowCredential["name"] as? String,
-                displayName: rawAllowCredential["displayName"] as? String
-            )}
-    }
     
     private func generateContextIdentifier() -> String {
         return UUID().uuidString

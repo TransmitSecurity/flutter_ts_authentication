@@ -4,7 +4,67 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.1] - 2026-01-05
+## [0.0.5] - September 2026
+
+### Added
+- **Native SDK upgrade**: Android `com.ts.sdk:authentication` 1.0.29 → **1.0.30**, iOS `authentication-ios-sdk` 1.2.0 → **1.2.2**
+  - Shared core moves with it: Android `com.ts.sdk:core` 1.0.24 → **1.0.30**, iOS `TSCoreSDK` floor
+    `from: "1.1.0"` → **`from: "1.1.5"`**
+  - **New transitive Android dependency**: core 1.0.30 adds
+    `com.google.android.gms:play-services-location:20.0.0`, which now reaches every Android app
+    consuming this plugin. Apps already depending on Play Services should check for a version
+    conflict
+  - iOS 1.2.2 introduces no public API change over 1.2.1; it corrects the SDK's own declared
+    platform floor. The plugin continues to declare `iOS 15.0` deliberately — see the UserGuide
+  - The iOS pin remains `exact:`, so an integrator cannot select a different
+    `TSAuthenticationSDK` version without forking the plugin. Deliberate: a loose constraint could
+    resolve to a version untested across the platform channel
+- **WebAuthn `options` now actually take effect (iOS)**:
+  `TSWebAuthnAuthenticationOptionValues.preferLocalCredentials` is a named constant for the one
+  option the native SDK supports. Previously the plugin accepted an `options` list and discarded
+  it on both platforms, so the option never reached the SDK. **iOS only** — the native Android SDK
+  declares no options parameter, so on Android the values are validated and then a documented
+  no-op
+- **TOTP device PIN protection**: `TSTOTPSecurityType.devicePin` and `TSTOTPSecurityType.devicePinOrBiometric`
+- **Native biometrics availability**:
+  - `nativeBiometricsStatus()` returns a normalized `TSBiometricsStatus`
+  - `nativeBiometricsType()` returns a normalized `TSBiometricsType`. Android reports the generic
+    `biometric` value, since the platform does not expose the concrete modality
+- **PIN code unregistration**: `unregisterPinCode()` and `commitPinUnregistration()`, mirroring the
+  existing register/commit flow
+- **WebAuthn with server-provided data**: `registerWebAuthnWithData()`,
+  `authenticateWebAuthnWithData()` and `signWebauthnTransactionWithData()`, complementing the
+  existing `approvalWebAuthnWithData()`
+- **Structured error codes**: `TSAuthenticationErrorCode` and
+  `TSAuthenticationErrorDetails.fromPlatformException()` expose a stable, cross-platform identifier
+  for each native failure, including the new `devicePinNotAvailable` /
+  `devicePinOrBiometricNotAvailable` TOTP errors and the enhanced iOS biometrics errors
+
+### Changed
+- `PlatformException.details` is now a map of `{'code': <stable code>, 'description': <native
+  description>}` instead of a plain string. `code` and `message` are unchanged. Callers that read
+  `details` as a `String` must migrate; use `TSAuthenticationErrorDetails.fromPlatformException()`,
+  which also tolerates the legacy string form.
+- **An unrecognized WebAuthn `options` value is now an error.** `approvalWebAuthn()`,
+  `approvalWebAuthnWithData()`, `authenticateWebAuthnWithData()` and
+  `signWebauthnTransactionWithData()` reject any name other than `preferLocalCredentials` with
+  `invalidArguments`, on both platforms. Previously any string was accepted and silently ignored,
+  so a call that passed an arbitrary value succeeded and did nothing; it now raises. Callers
+  passing placeholder values (including the `['option1', 'option2']` example in earlier versions of
+  the UserGuide) must pass an empty list or a value from
+  `TSWebAuthnAuthenticationOptionValues`. Consistent with the `registerTOTP()` change below — a
+  silently ignored option is indistinguishable from a typo.
+- **Consumer ProGuard rules now cover shared core.** `android/consumer-rules.pro` carries keeps for
+  a narrow set of `com.ts.coresdk.**` crypto, biometrics, error, logging and network classes.
+  Neither the native Authentication SDK nor `core-android-sdk` ships consumer rules, so the
+  plugin's file is the only keep set that reaches an integrating app. Affects release (R8) builds
+  only; debug builds never exercised these paths.
+
+### Fixed
+- `registerTOTP()` no longer silently falls back to biometric protection for an unrecognized
+  security type; it now reports an `invalidArguments` error instead.
+
+## [0.0.1] - January 2026
 
 ### Added
 - **Initial release** of Flutter TS Authentication plugin

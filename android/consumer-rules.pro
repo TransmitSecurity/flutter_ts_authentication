@@ -73,3 +73,92 @@
 
 # Prevent warnings about missing classes
 -dontwarn com.transmit.authentication.**
+
+# ---------------------------------------------------------------------------
+# Shared core SDK (com.ts.coresdk) keeps — carried on core's behalf.
+#
+# Neither of the SDKs below the plugin ships consumer ProGuard rules:
+#   * the core SDK declares no `consumerProguardFiles` at all;
+#   * the +A native SDK declares one, but the file is empty.
+# So THIS file is the only keep set that reaches an integrating app, and it has
+# to carry keeps for classes the plugin does not own and never references
+# directly — core arrives purely transitively via com.ts.sdk:authentication.
+#
+# Source of truth for what must survive: the core SDK's own obfuscation
+# config. The rules below are a deliberately NARROW subset of it — the crypto,
+# error, logging and network paths that the +A TOTP / PIN / native-biometrics
+# flows actually route through. Core 1.0.30 raised its own keep set by 64 lines
+# (device-data collectors, user agent), and core is at 1.0.24 -> 1.0.30 here.
+#
+# NOT added, deliberately (keeps are not added defensively):
+#   * com.ts.coresdk.device.**      — device-data collectors
+#   * com.ts.coresdk.geolocation.** — geolocation providers
+#   * com.google.android.gms.location.**
+# The +A plugin exposes no API that reaches these; they are DRS/IDO surface.
+# Keeping them here would force permanent, unnecessary `-keep ... { *; }` rules
+# on every +A integrator. Shipping consumer rules for them is the core SDK's
+# responsibility.
+#
+# NOT YET VERIFIED against a `mapping.txt` from a shrunk release build. Treat
+# this set as justified by core's own config rather than empirically minimal.
+# ---------------------------------------------------------------------------
+
+# Kotlin metadata and coroutines infrastructure — resolved by name/reflection.
+-keep @interface kotlin.Metadata { *; }
+-keepkotlinmetadata
+-dontwarn kotlin.**
+-dontwarn kotlinx.**
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+-keepclassmembers class kotlinx.** {
+    volatile <fields>;
+}
+-keepclassmembers class * {
+    synthetic <methods>;
+}
+-keepclassmembers class **$WhenMappings {
+    <fields>;
+}
+
+# Core error types — surfaced through the plugin's error mapper by name.
+-keep class com.ts.coresdk.errors.TransmitSecurityError { *; }
+-keep class com.ts.coresdk.errors.TransmitSecurityError$** { *; }
+-keep class com.ts.coresdk.errors.TSErrorFactory { <methods>; }
+
+# Core crypto — the TOTP, PIN code and native-biometrics key paths.
+-keep interface com.ts.coresdk.crypto.TSCryptographyManager { *; }
+-keep class com.ts.coresdk.crypto.TSCryptographyManagerImp { *; }
+-keep interface com.ts.coresdk.crypto.TSPairKeyResult { *; }
+-keep class com.ts.coresdk.crypto.TSPairKeyResult$** { *; }
+-keep interface com.ts.coresdk.crypto.TSBiometricPairKeyResult { *; }
+-keep class com.ts.coresdk.crypto.TSBiometricPairKeyResult$** { *; }
+-keep interface com.ts.coresdk.crypto.SignatureAuthenticatorResult { *; }
+-keep class com.ts.coresdk.crypto.SignatureAuthenticatorResult$** { *; }
+-keep interface com.ts.coresdk.crypto.SignatureAuthenticator { *; }
+-keep class com.ts.coresdk.crypto.api.** { *; }
+-keep interface com.ts.coresdk.crypto.logic.SignWithKeyResult { *; }
+-keep class com.ts.coresdk.crypto.logic.SignWithKeyResult$** { *; }
+-keep class com.ts.coresdk.crypto.logic.CryptographyActionError { *; }
+-keep class com.ts.coresdk.crypto.logic.CryptographyActionError$** { *; }
+-keep class com.ts.coresdk.crypto.util.UUIDUtils { *; }
+
+# Core biometrics — backs nativeBiometricsStatus() / nativeBiometricsType().
+-keep interface com.ts.coresdk.crypto.biometrcis.TSBiometricResult { *; }
+-keep class com.ts.coresdk.crypto.biometrcis.TSBiometricResult$** { *; }
+-keep class com.ts.coresdk.crypto.biometrcis.TSBiometricError { *; }
+-keep class com.ts.coresdk.crypto.biometrcis.TSBiometricSupportChecker { *; }
+-keep interface com.ts.coresdk.crypto.biometrcis.TSBiometricSupportChecker$TSBiometricSupportResult { *; }
+-keep class com.ts.coresdk.crypto.biometrcis.TSBiometricSupportChecker$TSBiometricSupportResult$* { *; }
+
+# Core session / network response — Gson-deserialized by field name.
+-keep interface com.ts.coresdk.TSNetworkResponse { *; }
+-keep class com.ts.coresdk.TSNetworkResponse$** { *; }
+-keep class com.ts.coresdk.crypto.session.ServerResponseFormat { *; }
+-keep class com.ts.coresdk.crypto.session.TSCryptoSessionError { *; }
+-keep class com.ts.coresdk.crypto.session.TSCryptoSessionErrorCode { *; }
+-keep class com.ts.coresdk.crypto.session.TSHeader { *; }
+-keep class com.ts.coresdk.network.exceptions.TSNoConnectivityException { *; }
+-keep class com.ts.coresdk.JsonStringConvertor { *; }
+
+# Core logging.
+-keep class com.ts.coresdk.TSLog { <methods>; }

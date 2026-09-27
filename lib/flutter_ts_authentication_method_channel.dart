@@ -91,6 +91,68 @@ class MethodChannelFlutterTsAuthentication
   }
 
   @override
+  Future<TSPinCodeUnregistrationCompletion> unregisterPinCode(
+    String username,
+  ) async {
+    final result = await methodChannel.invokeMethod('unregisterPinCode', {
+      'username': username,
+    });
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'unregisterPinCode returned null',
+      );
+    }
+
+    // Convert the result to Map<String, dynamic>
+    final Map<String, dynamic> resultMap = Map<String, dynamic>.from(
+      result as Map,
+    );
+
+    return TSPinCodeUnregistrationCompletion.fromMap(resultMap);
+  }
+
+  @override
+  Future<void> commitPinUnregistration(String contextIdentifier) async {
+    await methodChannel.invokeMethod<void>('commitPinUnregistration', {
+      'contextIdentifier': contextIdentifier,
+    });
+  }
+
+  @override
+  Future<TSBiometricsStatus> nativeBiometricsStatus() async {
+    final result = await methodChannel.invokeMethod<String>(
+      'nativeBiometricsStatus',
+    );
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'nativeBiometricsStatus returned null',
+      );
+    }
+
+    return TSBiometricsStatus.fromName(result);
+  }
+
+  @override
+  Future<TSBiometricsType> nativeBiometricsType() async {
+    final result = await methodChannel.invokeMethod<String>(
+      'nativeBiometricsType',
+    );
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'nativeBiometricsType returned null',
+      );
+    }
+
+    return TSBiometricsType.fromName(result);
+  }
+
+  @override
   Future<TSBiometricsRegistrationResult> registerNativeBiometrics(
     String username,
   ) async {
@@ -195,6 +257,86 @@ class MethodChannelFlutterTsAuthentication
       throw PlatformException(
         code: 'NULL_RESULT',
         message: 'signWebauthnTransaction returned null',
+      );
+    }
+
+    // Convert the result to Map<String, dynamic>
+    final Map<String, dynamic> resultMap = Map<String, dynamic>.from(
+      result as Map,
+    );
+
+    return TSWebAuthnAuthenticationResults.fromMap(resultMap);
+  }
+
+  @override
+  Future<TSWebAuthnRegistrationResults> registerWebAuthnWithData(
+    TSWebAuthnRegistrationData rawRegistrationData,
+  ) async {
+    final result = await methodChannel.invokeMethod(
+      'registerWebAuthnWithData',
+      {'rawRegistrationData': rawRegistrationData.toMap()},
+    );
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'registerWebAuthnWithData returned null',
+      );
+    }
+
+    // Convert the result to Map<String, dynamic>
+    final Map<String, dynamic> resultMap = Map<String, dynamic>.from(
+      result as Map,
+    );
+
+    return TSWebAuthnRegistrationResults.fromMap(resultMap);
+  }
+
+  @override
+  Future<TSWebAuthnAuthenticationResults> authenticateWebAuthnWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) async {
+    final result = await methodChannel.invokeMethod(
+      'authenticateWebAuthnWithData',
+      {
+        'rawAuthenticationData': rawAuthenticationData.toMap(),
+        'options': options,
+      },
+    );
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'authenticateWebAuthnWithData returned null',
+      );
+    }
+
+    // Convert the result to Map<String, dynamic>
+    final Map<String, dynamic> resultMap = Map<String, dynamic>.from(
+      result as Map,
+    );
+
+    return TSWebAuthnAuthenticationResults.fromMap(resultMap);
+  }
+
+  @override
+  Future<TSWebAuthnAuthenticationResults> signWebauthnTransactionWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) async {
+    final result = await methodChannel.invokeMethod(
+      'signWebauthnTransactionWithData',
+      {
+        'rawAuthenticationData': rawAuthenticationData.toMap(),
+        'options': options,
+      },
+    );
+
+    if (result == null) {
+      throw PlatformException(
+        code: 'NULL_RESULT',
+        message: 'signWebauthnTransactionWithData returned null',
       );
     }
 

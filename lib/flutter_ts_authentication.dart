@@ -1,4 +1,12 @@
 import 'flutter_ts_authentication_platform_interface.dart';
+import 'src/models/ts_native_biometrics.dart';
+import 'src/models/ts_pin_code_unregistration_completion.dart';
+import 'src/models/ts_webauthn_registration_data.dart';
+
+export 'src/models/ts_native_biometrics.dart';
+export 'src/models/ts_pin_code_unregistration_completion.dart';
+export 'src/models/ts_webauthn_registration_data.dart';
+export 'src/ts_authentication_error_details.dart';
 
 class TSWebAuthnInitOptions {
   final String startAuthentication;
@@ -184,7 +192,25 @@ class TSSignChallengeResult {
   }
 }
 
-enum TSTOTPSecurityType { biometric, none }
+/// Protection applied to a registered TOTP secret.
+enum TSTOTPSecurityType {
+  /// The secret is protected by biometric authentication.
+  biometric,
+
+  /// The secret is not protected by a user presence check.
+  none,
+
+  /// The secret is protected by the device PIN / passcode.
+  ///
+  /// Requires native Authentication SDK Android 1.0.30 / iOS 1.2.1 or later.
+  devicePin,
+
+  /// The secret is protected by the device PIN / passcode or biometrics,
+  /// whichever the user chooses.
+  ///
+  /// Requires native Authentication SDK Android 1.0.30 / iOS 1.2.1 or later.
+  devicePinOrBiometric,
+}
 
 class TSTOTPRegistrationCompletion {
   final String? issuer;
@@ -214,6 +240,28 @@ class TSTOTPGenerateCodeCompletion {
 
 // Type alias for TSWebAuthnAuthenticationOptions
 typedef TSWebAuthnAuthenticationOptions = String;
+
+/// The recognized values for [TSWebAuthnAuthenticationOptions].
+///
+/// The type is a bare `String` alias, so nothing in the type system constrains what a caller may
+/// pass. These constants are the supported set; anything else is rejected with `invalidArguments`
+/// on both platforms.
+///
+/// **Platform behavior differs.** `options` is honored on iOS only — the native iOS SDK accepts a
+/// `WebAuthnAuthenticationOptions` OptionSet, while the Android SDK's equivalent methods declare
+/// no options parameter. On Android the values are validated (so an unrecognized name fails the
+/// same way on both platforms) and then have no effect. See `UserGuide.md`.
+abstract final class TSWebAuthnAuthenticationOptionValues {
+  /// Prefer credentials already present on the device over server-provided ones.
+  ///
+  /// iOS only; no effect on Android. Note the native iOS SDK spells this option
+  /// `preferLocalCredantials`; that spelling is also accepted for callers who copied the native
+  /// name, but this correctly spelled constant is the plugin's contract.
+  static const String preferLocalCredentials = 'preferLocalCredentials';
+
+  /// Every recognized option name.
+  static const List<String> all = <String>[preferLocalCredentials];
+}
 
 class TSWebAuthnAuthenticationData {
   final Map<String, dynamic> data;
@@ -286,12 +334,41 @@ class FlutterTsAuthentication {
     );
   }
 
+  /// Unregisters the PIN code authenticator for [username].
+  ///
+  /// The returned context must be committed with [commitPinUnregistration]
+  /// once your backend acknowledged the unregistration.
+  Future<TSPinCodeUnregistrationCompletion> unregisterPinCode(String username) {
+    return FlutterTsAuthenticationPlatform.instance.unregisterPinCode(username);
+  }
+
+  /// Commits a pending PIN code unregistration returned by
+  /// [unregisterPinCode].
+  Future<void> commitPinUnregistration(String contextIdentifier) {
+    return FlutterTsAuthenticationPlatform.instance.commitPinUnregistration(
+      contextIdentifier,
+    );
+  }
+
   Future<TSBiometricsRegistrationResult> registerNativeBiometrics(
     String username,
   ) {
     return FlutterTsAuthenticationPlatform.instance.registerNativeBiometrics(
       username,
     );
+  }
+
+  /// Returns whether native biometrics can currently be used on this device.
+  Future<TSBiometricsStatus> nativeBiometricsStatus() {
+    return FlutterTsAuthenticationPlatform.instance.nativeBiometricsStatus();
+  }
+
+  /// Returns the biometric modality available on this device.
+  ///
+  /// Android reports [TSBiometricsType.biometric] when biometrics are usable,
+  /// since the platform does not expose the concrete modality.
+  Future<TSBiometricsType> nativeBiometricsType() {
+    return FlutterTsAuthenticationPlatform.instance.nativeBiometricsType();
   }
 
   Future<TSNativeBiometricsUnregisterResult> unregisterNativeBiometrics(
@@ -326,6 +403,36 @@ class FlutterTsAuthentication {
     return FlutterTsAuthenticationPlatform.instance.signWebauthnTransaction(
       username,
     );
+  }
+
+  /// Registers a WebAuthn credential using registration data obtained from
+  /// your backend, without the SDK performing the `start registration` call.
+  Future<TSWebAuthnRegistrationResults> registerWebAuthnWithData(
+    TSWebAuthnRegistrationData rawRegistrationData,
+  ) {
+    return FlutterTsAuthenticationPlatform.instance.registerWebAuthnWithData(
+      rawRegistrationData,
+    );
+  }
+
+  /// Authenticates using authentication data obtained from your backend,
+  /// without the SDK performing the `start authentication` call.
+  Future<TSWebAuthnAuthenticationResults> authenticateWebAuthnWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) {
+    return FlutterTsAuthenticationPlatform.instance
+        .authenticateWebAuthnWithData(rawAuthenticationData, options);
+  }
+
+  /// Signs a transaction using authentication data obtained from your backend,
+  /// without the SDK performing the `start authentication` call.
+  Future<TSWebAuthnAuthenticationResults> signWebauthnTransactionWithData(
+    TSWebAuthnAuthenticationData rawAuthenticationData,
+    List<TSWebAuthnAuthenticationOptions> options,
+  ) {
+    return FlutterTsAuthenticationPlatform.instance
+        .signWebauthnTransactionWithData(rawAuthenticationData, options);
   }
 
   Future<TSBiometricsAuthenticationResult> authenticateNativeBiometrics(
